@@ -24,7 +24,7 @@ if (-not $version) {
 Write-Host "==> AsciiArt $version"
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-    throw "未找到 go，请先安装 Go 1.21 或更高版本"
+    throw "未找到 go，请先安装 Go 1.27 或更高版本"
 }
 
 # 项目没有 cgo 代码，产物为单个静态可执行文件。

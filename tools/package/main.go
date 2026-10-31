@@ -36,8 +36,6 @@ func main() {
 	}
 	zw := zip.NewWriter(f)
 
-	// 先放入两个二进制程序。
-	// LICENSE 随二进制程序一起发布，因为 MIT 条款要求授权声明随分发物提供。
 	entries := []struct {
 		src  string
 		name string

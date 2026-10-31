@@ -44,7 +44,7 @@ fi
 echo "==> AsciiArt $VERSION"
 
 if ! command -v go >/dev/null 2>&1; then
-	echo "错误：未找到 go，请先安装 Go 1.21 或更高版本" >&2
+	echo "错误：未找到 go，请先安装 Go 1.27 或更高版本" >&2
 	exit 1
 fi
 
