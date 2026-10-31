@@ -1,0 +1,17 @@
+# Build output
+/dist/
+*.exe
+
+# Local scratch space for development helpers and screenshots
+/scratch/
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store

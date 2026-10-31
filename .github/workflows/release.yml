@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（例如 1.0.0）"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false # 项目没有模块依赖，用不到缓存。
+
+      - name: 解析版本号
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=0.0.0-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 格式检查
+        shell: bash
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "以下文件未通过 gofmt："
+            echo "$out"
+            exit 1
+          fi
+
+      - name: 静态检查
+        shell: bash
+        # unsafeptr 对 Win32 绑定是误报：消息参数以 uintptr 传入，必须重新解释为指针。
+        run: go vet -unsafeptr=false ./...
+
+      - name: 测试
+        shell: bash
+        run: go test ./...
+
+      - name: 构建与打包
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: ./scripts/build.sh --package --skip-tests
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: asciiart-${{ steps.version.outputs.value }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+
+      - name: 创建 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --title "AsciiArt ${GITHUB_REF#refs/tags/v}" \
+            --notes "见 README 与 CHANGELOG。" \
+            dist/*.zip dist/SHA256SUMS.txt
