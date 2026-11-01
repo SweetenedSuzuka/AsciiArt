@@ -24,7 +24,7 @@ type renderResult struct {
 	err error
 }
 
-// 控件编号，用于命中测试，并记录悬停和按下的控件。
+// 控件编号。鼠标移动和点击时据此判断指针位于哪个控件上，并记录悬停与按下的控件。
 const (
 	ctrlNone = iota
 	ctrlOpen
@@ -60,7 +60,7 @@ const (
 )
 
 // App 保存整个应用程序的状态。它只存在于界面线程中。
-// 跨协程传递的数据只有渲染结果，通过 mu 互斥锁保护。
+// 工作协程只通过 mu 保护下的 result 把渲染结果交回界面线程。
 type App struct {
 	hwnd  HWND
 	hInst HINSTANCE
@@ -75,7 +75,7 @@ type App struct {
 	bufW    int32
 	bufH    int32
 
-	// 文档状态。
+	// 当前图片与渲染结果。
 	img     *safedecode.Image
 	imgPath string
 	imgBmp  GpBitmap
@@ -131,7 +131,7 @@ var (
 	arrowCursor HCURSOR
 )
 
-// Options 配置应用程序窗口的初始状态。
+// Options 配置启动时打开的图片、渲染模式和输出宽度。
 type Options struct {
 	Image string
 	Mode  render.Mode
@@ -188,7 +188,11 @@ func Run(opt Options) int {
 		a.dpi = 96
 	}
 	a.theme = newTheme(a.dpi)
-	defer a.theme.free()
+	defer func() {
+		if a.theme != nil {
+			a.theme.free()
+		}
+	}()
 
 	dc, _, _ := procCreateCompatibleDC.Call(0)
 	a.measureDC = HDC(dc)
@@ -201,7 +205,7 @@ func Run(opt Options) int {
 
 	icon, _, _ := procLoadIconW.Call(0, idiApplication)
 
-	className := u16("AsciiArtWindowClass")
+	className := utf16Ptr("AsciiArtWindowClass")
 	wc := WndClassEx{
 		CbSize:        UINT(unsafe.Sizeof(WndClassEx{})),
 		Style:         csHRedraw | csVRedraw,
@@ -222,7 +226,7 @@ func Run(opt Options) int {
 	hwnd, _, _ := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
-		uintptr(unsafe.Pointer(u16(windowTitle))),
+		uintptr(unsafe.Pointer(utf16Ptr(windowTitle))),
 		style,
 		cwUseDefault, cwUseDefault, 1200, 800,
 		0, 0, uintptr(a.hInst), 0,
@@ -247,7 +251,7 @@ func Run(opt Options) int {
 	a.theme = newTheme(a.dpi)
 
 	// 显式地设置窗口尺寸并居中。
-	// CreateWindowExW 的参数使用物理像素，布局使用设计像素，只有在得知显示器 DPI 之后两者才能换算一致。
+	// CreateWindowExW 的参数使用设备的物理像素，布局使用设计像素，只有在得知显示器 DPI 之后两者才能换算一致。
 	a.centerWindow(1180, 780)
 
 	procDragAcceptFiles.Call(uintptr(a.hwnd), 1)
@@ -337,8 +341,8 @@ func wndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
 		return r
 	}
-	// 原生回调内部发生 panic 会让进程直接退出，并且看不到任何信息。
-	// 这里用 recover 捕获异常，把错误显示在界面上，再正常关闭。
+	// 原生回调内部发生 panic 会让进程直接退出，界面上不会显示任何信息。
+	// 这里用 recover 捕获异常，把错误显示在界面上，让窗口过程返回而不退出进程。
 	defer func() {
 		if rec := recover(); rec != nil {
 			a.errMsg = fmt.Sprintf("内部错误：%v", rec)
@@ -452,8 +456,9 @@ func wndProc(hwnd HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case wmCaptureChanged:
-		// 失去鼠标捕获时（切换窗口、其他窗口接管鼠标），不能让滑块仍然跟随指针移动。
+		// 失去鼠标捕获时（切换窗口、其他窗口接管鼠标），滑块和滚动条都不应继续跟随指针移动。
 		a.dragSlider = ctrlNone
+		a.dragScroll = scrollNone
 		a.pressed = ctrlNone
 		a.invalidate()
 		return 0
@@ -497,9 +502,20 @@ func (a *App) pointInCanvas(x, y int32) bool {
 func (a *App) loadImage(path string) {
 	img, err := safedecode.Decode(path)
 	if err != nil {
-		a.errMsg = err.Error()
+		if a.imgBmp != 0 {
+			freeImage(a.imgBmp)
+			a.imgBmp = 0
+		}
+		if a.imgHBM != 0 {
+			procDeleteObject.Call(uintptr(a.imgHBM))
+			a.imgHBM = 0
+		}
+		a.img = nil
+		a.imgPath = ""
 		a.art = nil
 		a.status = ""
+		a.errMsg = err.Error()
+		a.setTitle("")
 		a.invalidate()
 		return
 	}
@@ -527,7 +543,7 @@ func (a *App) setTitle(name string) {
 	if name != "" {
 		title = name + " — " + windowTitle
 	}
-	procSetWindowTextW.Call(uintptr(a.hwnd), uintptr(unsafe.Pointer(u16(title))))
+	procSetWindowTextW.Call(uintptr(a.hwnd), uintptr(unsafe.Pointer(utf16Ptr(title))))
 }
 
 func (a *App) openDialog() {
@@ -546,6 +562,11 @@ func (a *App) exportDialog() {
 	if !ok {
 		return
 	}
+	if artio.SameTarget(path, a.imgPath) {
+		a.errMsg = "导出路径不能与输入图片相同"
+		a.invalidate()
+		return
+	}
 	content := a.plainText()
 	if _, err := artio.WriteFile(path, []byte(content)); err != nil {
 		a.errMsg = err.Error()
@@ -558,7 +579,7 @@ func (a *App) exportDialog() {
 }
 
 // plainText 生成当前字符画的纯文本，不带 ANSI 转义序列。
-// 导出到 .txt 文件的内容应当是纯文本。
+// 导出到 .txt 文件或复制到剪贴板都是纯文本。
 func (a *App) plainText() string {
 	if a.art == nil {
 		return ""
@@ -573,28 +594,45 @@ func (a *App) copyToClipboard() {
 	text := a.plainText()
 	utf, err := syscall.UTF16FromString(text)
 	if err != nil {
+		a.errMsg = "文本包含空字符（U+0000），无法复制到剪贴板"
+		a.invalidate()
 		return
 	}
 	size := uintptr(len(utf) * 2)
 
+	h, _, _ := procGlobalAlloc.Call(gmemMoveable, size)
+	if h == 0 {
+		a.errMsg = "无法分配剪贴板内存"
+		a.invalidate()
+		return
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		procGlobalFree.Call(h)
+		a.errMsg = "无法锁定剪贴板内存"
+		a.invalidate()
+		return
+	}
+	copy(unsafe.Slice((*uint16)(unsafe.Pointer(p)), len(utf)), utf)
+	procGlobalUnlock.Call(h)
+
 	if r, _, _ := procOpenClipboard.Call(uintptr(a.hwnd)); r == 0 {
+		procGlobalFree.Call(h)
+		a.errMsg = "无法打开剪贴板"
+		a.invalidate()
 		return
 	}
 	defer procCloseClipboard.Call()
 
 	procEmptyClipboard.Call()
-	h, _, _ := procGlobalAlloc.Call(gmemMoveable, size)
-	if h == 0 {
+	if r, _, _ := procSetClipboardData.Call(cfUnicodeText, h); r == 0 {
+		procGlobalFree.Call(h)
+		a.errMsg = "写入剪贴板失败"
+		a.invalidate()
 		return
 	}
-	p, _, _ := procGlobalLock.Call(h)
-	if p == 0 {
-		return
-	}
-	copy(unsafe.Slice((*uint16)(unsafe.Pointer(p)), len(utf)), utf)
-	procGlobalUnlock.Call(h)
-	procSetClipboardData.Call(cfUnicodeText, h)
 
+	a.errMsg = ""
 	a.status = "已复制到剪贴板"
 	a.invalidate()
 }
@@ -609,6 +647,9 @@ func (a *App) onDrop(h HDROP) {
 	n, _, _ := procDragQueryFileW.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	if n == 0 {
 		return
+	}
+	if n > uintptr(len(buf)) {
+		n = uintptr(len(buf))
 	}
 	a.loadImage(syscall.UTF16ToString(buf[:n]))
 }
@@ -683,7 +724,7 @@ func (a *App) setMode(m render.Mode) {
 
 // -------------------------------------------------------------------- 渲染
 
-// requestRender 立即启动一次渲染。
+// requestRender 启动一次渲染。已有渲染在进行时，只记下还有一次待渲染，等这次结束后再启动。
 // 通过请求序号丢弃过期的结果，而不中断进行中的渲染。
 func (a *App) requestRender() {
 	if a.img == nil {
@@ -708,6 +749,14 @@ func (a *App) requestRender() {
 	a.busyMu.Unlock()
 
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				a.mu.Lock()
+				a.result = &renderResult{seq: seq, err: fmt.Errorf("渲染失败：%v", rec)}
+				a.mu.Unlock()
+				procPostMessageW.Call(uintptr(a.hwnd), wmApp+1, 0, 0)
+			}
+		}()
 		art, err := render.Render(img, mode, opts)
 		a.mu.Lock()
 		a.result = &renderResult{seq: seq, art: art, err: err}
@@ -717,7 +766,7 @@ func (a *App) requestRender() {
 }
 
 // scheduleRender 延迟一小段时间再启动渲染。
-// 拖动滑块时快速触发也不会连续启动大量完整渲染。
+// 拖动滑块时即使频繁触发，也只在停下后启动一次渲染，防止连续进行大量的渲染。
 func (a *App) scheduleRender() {
 	procSetTimer.Call(uintptr(a.hwnd), timerDebounce, 110, 0)
 }
@@ -741,7 +790,7 @@ func (a *App) consumeRender() {
 		} else {
 			a.art = res.art
 			a.errMsg = ""
-			a.status = fmt.Sprintf("%d×%d %s · %d×%d 字符 · %s",
+			a.status = fmt.Sprintf("%d×%d %s · %d×%d 单元格 · %s",
 				res.art.SourceWidth, res.art.SourceHeight, res.art.Format,
 				res.art.Cols, res.art.Rows, formatDuration(res.art.Elapsed))
 		}
@@ -786,9 +835,9 @@ func (a *App) showOpenDialog() (string, bool) {
 		LpstrFilter: &filter[0],
 		LpstrFile:   &buf[0],
 		NMaxFile:    DWORD(len(buf)),
-		LpstrTitle:  u16("打开图片"),
-		Flags:       ofnFileMustExist | ofnPathMustExist | ofnExplorer,
-		LpstrDefExt: u16("png"),
+		LpstrTitle:  utf16Ptr("打开图片"),
+		Flags:       ofnFileMustExist | ofnPathMustExist | ofnExplorer | ofnNoChangeDir,
+		LpstrDefExt: utf16Ptr("png"),
 	}
 	r, _, _ := procGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
 	if r == 0 {
@@ -806,7 +855,7 @@ func (a *App) showSaveDialog() (string, bool) {
 			def = stem + ".txt"
 		}
 	}
-	if u, err := syscall.UTF16FromString(def); err == nil {
+	if u, err := syscall.UTF16FromString(def); err == nil && len(u) <= len(buf) {
 		copy(buf, u)
 	}
 	filter := utf16List(
@@ -819,9 +868,9 @@ func (a *App) showSaveDialog() (string, bool) {
 		LpstrFilter: &filter[0],
 		LpstrFile:   &buf[0],
 		NMaxFile:    DWORD(len(buf)),
-		LpstrTitle:  u16("导出为文本"),
-		Flags:       ofnOverwritePrompt | ofnPathMustExist | ofnExplorer,
-		LpstrDefExt: u16("txt"),
+		LpstrTitle:  utf16Ptr("导出为文本"),
+		Flags:       ofnOverwritePrompt | ofnPathMustExist | ofnExplorer | ofnNoChangeDir,
+		LpstrDefExt: utf16Ptr("txt"),
 	}
 	r, _, _ := procGetSaveFileNameW.Call(uintptr(unsafe.Pointer(&ofn)))
 	if r == 0 {

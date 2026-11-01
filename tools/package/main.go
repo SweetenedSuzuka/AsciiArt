@@ -1,7 +1,7 @@
-// package 负责组装发布用的压缩包。
+// 把发布用的文件打包成 zip 压缩包，并写出 SHA256 校验值。
 //
-// 程序只使用 Go 标准库，因此可以在 Git Bash、PowerShell 与持续集成环境中运行。
-// 这些环境是否提供 zip、7z、Compress-Archive 并不一致，因此打包逻辑直接用 Go 实现。
+// 程序只使用 Go 标准库，编译后不依赖外部程序。
+// 由于 Git Bash、PowerShell 与持续集成环境不一定都提供 zip、7z 或 Compress-Archive，因此打包逻辑直接用 Go 实现。
 package main
 
 import (
@@ -13,15 +13,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 func main() {
-	version := flag.String("version", "dev", "写入压缩包名称的版本号")
+	version := flag.String("version", "dev", "压缩包名称中使用的版本号")
 	dist := flag.String("dist", "dist", "存放构建产物的目录")
 	outDir := flag.String("out", "dist", "存放压缩包的目录")
 	flag.Parse()
+
+	if err := checkVersion(*version); err != nil {
+		fail(err)
+	}
 
 	archiveName := fmt.Sprintf("asciiart-%s-windows-amd64", *version)
 	zipPath := filepath.Join(*outDir, archiveName+".zip")
@@ -78,7 +83,7 @@ func addFile(zw *zip.Writer, src, name string, mode os.FileMode) error {
 	content, err := os.ReadFile(src)
 	if err != nil {
 		if os.IsNotExist(err) && mode == 0o644 {
-			return nil // 该文件是可选的文档，缺失时跳过。
+			return nil // 权限为 0o644 的条目按可选文件处理，缺失时跳过。
 		}
 		return fmt.Errorf("%s: %w", src, err)
 	}
@@ -108,4 +113,14 @@ func hashFile(path string) (string, error) {
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "打包失败：%v\n", err)
 	os.Exit(1)
+}
+
+// versionPattern 限定版本号可以使用的字符，防止版本号里的斜杠等字符把压缩包写到别的目录。
+var versionPattern = regexp.MustCompile(`^[0-9A-Za-z._+-]+$`)
+
+func checkVersion(v string) error {
+	if !versionPattern.MatchString(v) {
+		return fmt.Errorf("版本号只允许字母、数字、点、加号、下划线和连字符，目前值为「%s」", v)
+	}
+	return nil
 }

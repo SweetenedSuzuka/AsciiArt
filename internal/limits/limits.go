@@ -31,7 +31,7 @@ const (
 // CheckOutputWidth 校验请求的字符宽度。
 func CheckOutputWidth(w int) error {
 	if w < MinOutputWidth || w > MaxOutputWidth {
-		return fmt.Errorf("输出宽度必须在 %d..%d 之间，收到 %d", MinOutputWidth, MaxOutputWidth, w)
+		return fmt.Errorf("输出宽度必须在 %d..%d 之间，目前值为 %d", MinOutputWidth, MaxOutputWidth, w)
 	}
 	return nil
 }

@@ -9,10 +9,35 @@ import (
 
 func TestCheckTargetRejectsReservedNames(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"NUL", "nul.txt", "CON", "aux.log", "COM1.txt", "lpt9"} {
+	for _, name := range []string{"NUL", "nul.txt", "CON", "aux.log", "COM1.txt", "lpt9", "CONIN$", "CONOUT$", "COM¹.txt", "LPT²"} {
 		if err := CheckTarget(filepath.Join(dir, name)); err == nil {
 			t.Errorf("%q should be rejected as a reserved device name", name)
 		}
+	}
+}
+
+func TestCheckTargetRejectsAlternateDataStream(t *testing.T) {
+	dir := t.TempDir()
+	if err := CheckTarget(filepath.Join(dir, "out.txt:stream")); err == nil {
+		t.Error("alternate data stream should be rejected")
+	}
+}
+
+func TestSameTarget(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(a, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !SameTarget(a, a) {
+		t.Error("the same path should be reported as the same target")
+	}
+	if SameTarget(a, b) {
+		t.Error("different paths should not be reported as the same target")
+	}
+	if SameTarget(a, filepath.Join(dir, "missing.txt")) {
+		t.Error("an existing file and a missing path should not match")
 	}
 }
 

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "1.0.0"
+        description: 版本号，例如 1.0.0
         required: false
 
 permissions:
@@ -24,16 +24,25 @@ jobs:
           go-version: "1.27"
           cache: false # 项目没有模块依赖，不需要缓存。
 
-      - name: 解析版本号
+      - name: 确定版本号
         id: version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          case "$INPUT_VERSION" in
+            "") ;;
+            *[!0-9A-Za-z._+-]*)
+              echo "版本号只允许字母、数字、点、加号、下划线和连字符，当前输入参数为：$INPUT_VERSION" >&2
+              exit 1
+              ;;
+          esac
+          if [ -n "$INPUT_VERSION" ]; then
+            printf 'value=%s\n' "$INPUT_VERSION" >> "$GITHUB_OUTPUT"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            printf 'value=%s\n' "${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=0.0.0-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            printf 'value=0.0.0-dev.%s\n' "${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: 格式检查
@@ -48,7 +57,7 @@ jobs:
 
       - name: 静态检查
         shell: bash
-        # unsafeptr 对 Win32 绑定是误报：消息参数以 uintptr 传入，必须重新解释为指针。
+        # 关闭 unsafeptr 检查：Win32 绑定中消息参数以 uintptr 类型传入，需要重新解释为指针，静态分析器无法区分这种情况与指针运算错误。
         run: go vet -unsafeptr=false ./...
 
       - name: 测试
@@ -78,5 +87,5 @@ jobs:
         run: |
           gh release create "${GITHUB_REF#refs/tags/}" \
             --title "AsciiArt ${GITHUB_REF#refs/tags/v}" \
-            --notes "见 README 与 CHANGELOG。" \
+            --notes "发布说明见 README。" \
             dist/*.zip dist/SHA256SUMS.txt

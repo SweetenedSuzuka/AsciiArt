@@ -327,7 +327,7 @@ type font struct {
 }
 
 func newFont(family string, sizePx float32, bold bool) *font {
-	name := u16(family)
+	name := utf16Ptr(family)
 	var fam GpFontFamily
 	st, _, _ := procGdipCreateFontFamilyName.Call(
 		uintptr(unsafe.Pointer(name)), 0, uintptr(unsafe.Pointer(&fam)))

@@ -1,6 +1,7 @@
-// Package gui 实现 AsciiArt 的桌面应用程序。
-// 窗口界面全部用 GDI+ 手工绘制，采用 KDE Breeze 设计语言。程序不依赖第三方库：user32、gdi32、gdiplus、comdlg32 和 shell32 都通过 syscall 调用。
-// 编译产物因此是单个独立文件，涉及外部调用的只有本文件中列出的这些函数。
+// gui 包实现 AsciiArt 的桌面应用程序。
+// 窗口界面全部由程序绘制，主要使用 GDI+，少量操作用 gdi32。外观参照 KDE Breeze 的配色与圆角风格。
+// 程序不依赖第三方库，user32、gdi32、gdiplus、comdlg32、shell32、dwmapi 和 ole32 都通过 syscall 调用。
+// 编译产物是单个可执行文件，这些外部函数的声明集中在本文件与 gdiplus.go 中，其余文件只调用它们。
 package gui
 
 import (
@@ -108,6 +109,7 @@ var (
 	procGlobalAlloc  = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock   = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock = kernel32.NewProc("GlobalUnlock")
+	procGlobalFree   = kernel32.NewProc("GlobalFree")
 
 	procGetOpenFileNameW = comdlg32.NewProc("GetOpenFileNameW")
 	procGetSaveFileNameW = comdlg32.NewProc("GetSaveFileNameW")
@@ -122,7 +124,7 @@ var (
 	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
 )
 
-// Point、Rect 及相关结构体与 Win32 的结构体逐字段对应。Go 插入的填充字节与 C 编译器一致，因此这些结构体可以直接按指针传递。
+// Point、Rect 等结构体的字段顺序和宽度与 Win32 的结构体一致，因此可以直接按指针传递。
 type Point struct{ X, Y int32 }
 
 type Rect struct{ Left, Top, Right, Bottom int32 }
@@ -257,7 +259,7 @@ type TrackMouseEvent struct {
 	DwHoverTime DWORD
 }
 
-// 窗口样式与消息常量。
+// Win32 常量：窗口样式、窗口消息与其他参数的取值。
 const (
 	wsOverlappedWindow = 0x00CF0000
 	wsVisible          = 0x10000000
@@ -338,7 +340,8 @@ const (
 	swpNoSize     = 0x0001
 )
 
-func u16(s string) *uint16 {
+// utf16Ptr 把字符串转换成 Win32 需要的、以 0 结尾的 UTF-16 序列，其中字符串含 U+0000 时返回 nil。
+func utf16Ptr(s string) *uint16 {
 	p, err := syscall.UTF16PtrFromString(s)
 	if err != nil {
 		return nil
@@ -358,11 +361,11 @@ func rgb(r, g, b byte) COLORREF {
 	return COLORREF(uint32(r) | uint32(g)<<8 | uint32(b)<<16)
 }
 
-// iptr 把有符号整数转换成 Win32 需要的 uintptr 形式，并保留补码的位排列。
+// int32Arg 把有符号整数转换成 Win32 需要的 uintptr 形式，并保留补码的位排列。
 // CreateFontW 的高度参数传入负数时表示“字符高度”而不是“单元格高度”，而负数字面量无法在编译期转换成 uintptr。
-func iptr(v int32) uintptr { return uintptr(v) }
+func int32Arg(v int32) uintptr { return uintptr(v) }
 
-// callOptional 调用延迟加载的 proc，当导出函数不存在时返回零值而不是触发panic。旧版 Windows 可能缺少这里用到的部分函数（GetDpiForWindow、DwmSetWindowAttribute）。
+// callOptional 调用延迟加载的函数，导出函数不存在时返回零值，不会触发 panic。Windows 10 1607 及更早的版本可能缺少这里用到的部分函数（例如GetDpiForWindow、DwmSetWindowAttribute等）。
 func callOptional(proc *syscall.LazyProc, args ...uintptr) uintptr {
 	if err := proc.Find(); err != nil {
 		return 0

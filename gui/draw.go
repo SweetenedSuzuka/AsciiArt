@@ -206,7 +206,7 @@ func (a *App) paint(hwnd HWND) {
 	// ExtTextOut 处理大量单个字符的速度远快于 GDI+，ETO_OPAQUE 使每个半块单元格在同一次调用中得到各自的背景色。
 	a.drawArtText(a.memDC)
 
-	// 滚动条在网格之后绘制，使字符画占满整个画布时滚动条仍然可见。
+	// 滚动条在网格之后绘制，使字符画占满整个预览区时滚动条仍然可见。
 	if over := newGraphics(a.memDC); over != nil {
 		over.setSmoothing(smoothingAntiAlias)
 		over.setTextHint(textHintAntiAliasGridFit)
@@ -386,9 +386,9 @@ func pickFont(dc HDC, candidates []string, sample rune) string {
 
 func fontHasGlyph(dc HDC, name string, size int32, r rune) bool {
 	hf, _, _ := procCreateFontW.Call(
-		iptr(-size), 0, 0, 0, fwNormal, 0, 0, 0,
+		int32Arg(-size), 0, 0, 0, fwNormal, 0, 0, 0,
 		defaultCharset, outTTPrecis, clipDefaultPrecis, antialiased,
-		fixedPitch|ffModern, uintptr(unsafe.Pointer(u16(name))))
+		fixedPitch|ffModern, uintptr(unsafe.Pointer(utf16Ptr(name))))
 	if hf == 0 {
 		return false
 	}
@@ -502,9 +502,9 @@ func clampF32(v, lo, hi float32) float32 {
 // newArtFont 创建用于绘制网格的 GDI 字体，并度量生成的单元格矩形。
 func (a *App) newArtFont(name string, size float32) *gdiFont {
 	hf, _, _ := procCreateFontW.Call(
-		iptr(-int32(size+0.5)), 0, 0, 0, fwNormal, 0, 0, 0,
+		int32Arg(-int32(size+0.5)), 0, 0, 0, fwNormal, 0, 0, 0,
 		defaultCharset, outTTPrecis, clipDefaultPrecis, antialiased,
-		fixedPitch|ffModern, uintptr(unsafe.Pointer(u16(name))))
+		fixedPitch|ffModern, uintptr(unsafe.Pointer(utf16Ptr(name))))
 	if hf == 0 {
 		return nil
 	}
@@ -1057,7 +1057,7 @@ func (a *App) drawCheck(g *gfx, r Rect, checked bool, label string, id int) {
 func (a *App) hitTest(x, y int32) int {
 	l := a.layout()
 
-	// 缩放控件位于标题栏中，因此命中测试在画布之前进行。
+	// 缩放控件位于标题栏中，因此命中测试在预览区之前进行。
 	if hit(l.zoomGroup, x, y) {
 		switch {
 		case hit(l.zoomOut, x, y):

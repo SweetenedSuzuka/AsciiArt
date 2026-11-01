@@ -86,8 +86,8 @@ func TestRenderToStdout(t *testing.T) {
 	}
 }
 
-// TestFlagsAfterPositional 用于验证参数重排是否正常工作。
-// 如果不做重排，Go 的 flag 包会把“-w 20”当作位置参数。
+// TestFlagsAfterPositional 验证标志写在图片路径之后仍能被解析。
+// 如果不把位置参数移到末尾，Go 的 flag 包会把“-w”和“20”留在位置参数里。
 func TestFlagsAfterPositional(t *testing.T) {
 	dir := t.TempDir()
 	img := writeTestImage(t, dir)
@@ -154,8 +154,8 @@ func TestStdoutOnlyWritesNoFiles(t *testing.T) {
 	}
 }
 
-// TestOutputDirectoryRejected 验证一类容易忽略的情况。
-// 指定多个模式时基础文件名会加后缀，“dist”会变成“dist_ascii”，并在用户意图所在的目录旁边静默写入成功。
+// TestOutputDirectoryRejected 验证输出路径是目录时被拒绝。
+// 指定多个模式时输出路径会加后缀（例如不指定 -m 时默认的 all 就属于这种情况），例如“dist”变成“dist_ascii”，因此目录必须在加后缀之前拒绝，否则写入的文件会出现在用户指定的目录旁边。
 func TestOutputDirectoryRejected(t *testing.T) {
 	dir := t.TempDir()
 	img := writeTestImage(t, dir)
@@ -196,5 +196,64 @@ func TestVersionAndHelp(t *testing.T) {
 	}
 	if code, out, _ := run(t, "-h"); code != 0 || !strings.Contains(out, "用法") {
 		t.Fatalf("help failed: %d %q", code, out)
+	}
+}
+
+// TestAliasLastOccurrenceWins 验证同一组别名以最后出现的那个为准。
+func TestAliasLastOccurrenceWins(t *testing.T) {
+	dir := t.TempDir()
+	img := writeTestImage(t, dir)
+
+	code, stdout, stderr := run(t, img, "-m", "ascii", "--width", "120", "-w", "20", "--no-color")
+	if code != 0 {
+		t.Fatalf("exit code = %d (%s)", code, stderr)
+	}
+	first := strings.SplitN(strings.TrimRight(stdout, "\n"), "\n", 2)[0]
+	if got := len([]rune(first)); got != 20 {
+		t.Fatalf("first line has %d columns, want 20", got)
+	}
+
+	code, stdout, stderr = run(t, img, "-m", "ascii", "-w", "20", "--width", "120", "--no-color")
+	if code != 0 {
+		t.Fatalf("exit code = %d (%s)", code, stderr)
+	}
+	first = strings.SplitN(strings.TrimRight(stdout, "\n"), "\n", 2)[0]
+	if got := len([]rune(first)); got != 120 {
+		t.Fatalf("first line has %d columns, want 120", got)
+	}
+}
+
+func TestEmptyModeIsUsageError(t *testing.T) {
+	dir := t.TempDir()
+	img := writeTestImage(t, dir)
+	code, _, stderr := run(t, img, "-m", "", "-w", "10")
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 (%s)", code, stderr)
+	}
+	if !strings.Contains(stderr, "输出模式不能为空") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+// TestOutputPathEqualToInputIsRejected 验证输出路径与输入图片是同一个文件时不会覆盖它。
+func TestOutputPathEqualToInputIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	img := writeTestImage(t, dir)
+	before, err := os.ReadFile(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := run(t, img, "-m", "ascii", "-w", "10", "-o", img)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 (%s)", code, stderr)
+	}
+
+	after, err := os.ReadFile(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("the source image was overwritten")
 	}
 }

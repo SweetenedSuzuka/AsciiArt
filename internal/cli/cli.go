@@ -1,6 +1,6 @@
 // cli 包实现命令行接口。
-// 所有用户输入都经过同一个解析、校验和渲染步骤。
-// 错误以值的形式返回，并在统一的位置转换成退出码，因此任何代码路径都不会因为输入异常而崩溃。
+// 所有用户输入都经过同一套解析、校验与渲染流程。
+// 各步骤把错误作为返回值交给 Run，由 Run 打印错误并决定退出码，因此输入异常不会让程序崩溃。
 package cli
 
 import (
@@ -23,26 +23,26 @@ import (
 // Version 由构建脚本在链接时写入。
 var Version = "dev"
 
-const usageText = `AsciiArt — 把图片转成字符画
+const usageText = `AsciiArt — 把图片转换成字符画
 
 用法：
   asciiart [选项] <图片文件>
 
 选项：
-  -m, --mode NAME       输出模式：ascii | braille | blocks | all（默认 all）
+  -m, --mode NAME       输出模式：ascii | braille | blocks | all，也可以用逗号组合（默认 all）
   -w, --width N         输出字符宽度，%d..%d（默认 80）
   -a, --threshold N     透明度阈值，低于该值视为透明，0..255（默认 128）
   -c, --colored         强制输出 24 位 ANSI 颜色
       --no-color        强制关闭颜色
   -i, --invert          反转亮度（ASCII 模式）
   -o, --output FILE     写入文件；all 模式会自动加 _ascii/_braille/_blocks 后缀
-      --charset STR     ASCII 亮度梯度（默认 %q）
+      --charset STR     ASCII 字符集，按从暗到亮排列（默认 %q）
       --bg #RRGGBB      透明区域的背景色（默认 #000000）
-      --sigma F         盲文自适应阈值模糊半径（默认 3.0）
-      --sharpen F       盲文边缘增强强度，1.0 关闭（默认 1.2）
-      --contrast F      盲文对比度，1.0 关闭（默认 1.5）
-      --k F             盲文阈值偏移系数（默认 0.4）
-      --scale F         半色块纵向缩放（默认 1.0）
+      --sigma F         盲文自适应阈值的模糊半径（默认 3.0）
+      --sharpen F       盲文锐化强度，1.0 表示不锐化（默认 1.2）
+      --contrast F      盲文对比度，1.0 表示不调整（默认 1.5）
+      --k F             盲文阈值偏移量（默认 0.4）
+      --scale F         半色块高度相对宽度的缩放比例（默认 1.0）
   -h, --help            显示帮助
   -v, --version         显示版本
 
@@ -64,9 +64,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		modeLong        = fs.String("mode", "all", "")
 		widthShort      = fs.Int("w", 80, "")
 		widthLong       = fs.Int("width", 80, "")
-		alphaShort      = fs.Int("a", 128, "")
-		alphaLong       = fs.Int("threshold", 128, "")
-		alphaDash       = fs.Int("alpha-threshold", 128, "")
+		thresholdShort  = fs.Int("a", 128, "")
+		thresholdLong   = fs.Int("threshold", 128, "")
+		thresholdDash   = fs.Int("alpha-threshold", 128, "")
 		coloredShort    = fs.Bool("c", false, "")
 		coloredLong     = fs.Bool("colored", false, "")
 		noColor         = fs.Bool("no-color", false, "")
@@ -87,7 +87,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		helpLong        = fs.Bool("help", false, "")
 	)
 
-	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+	reordered := reorderArgs(fs, args)
+	if err := fs.Parse(reordered); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(stdout)
 			return 0
@@ -105,29 +106,28 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// 后出现的标志优先生效，即仅当短选项保持默认值时，长选项的显式指定才覆盖它。
-	// 两种别名因此不会互相覆盖。
+	// 同一组别名以最后出现在命令行里的那个为准。
 	mode := *modeShort
-	if *modeLong != "all" {
+	if lastFlagName(reordered, "m", "mode") == "mode" {
 		mode = *modeLong
 	}
 	width := *widthShort
-	if *widthLong != 80 {
+	if lastFlagName(reordered, "w", "width") == "width" {
 		width = *widthLong
 	}
-	threshold := *alphaShort
-	if *alphaLong != 128 {
-		threshold = *alphaLong
-	}
-	if *alphaDash != 128 {
-		threshold = *alphaDash
+	threshold := *thresholdShort
+	switch lastFlagName(reordered, "a", "threshold", "alpha-threshold") {
+	case "threshold":
+		threshold = *thresholdLong
+	case "alpha-threshold":
+		threshold = *thresholdDash
 	}
 	invert := *invertShort || *invertLong
 	outPath := *outputShort
-	if outPath == "" {
+	if lastFlagName(reordered, "o", "output") == "output" {
 		outPath = *outputLong
 	}
-	useColor := *coloredShort || *coloredLong
+	forceColor := *coloredShort || *coloredLong
 
 	if fs.NArg() == 0 {
 		fmt.Fprintln(stderr, "缺少图片路径")
@@ -136,7 +136,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() > 1 {
-		fmt.Fprintf(stderr, "只能指定一个图片文件，收到 %d 个\n", fs.NArg())
+		fmt.Fprintf(stderr, "只能指定一个图片文件，目前值为 %d 个\n", fs.NArg())
 		return 2
 	}
 
@@ -153,7 +153,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if threshold < 0 || threshold > 255 {
-		fmt.Fprintf(stderr, "透明度阈值必须在 0..255 之间，收到 %d\n", threshold)
+		fmt.Fprintf(stderr, "透明度阈值必须在 0..255 之间，目前值为 %d\n", threshold)
 		return 2
 	}
 
@@ -189,23 +189,25 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		arts = append(arts, art)
 	}
 
-	// 颜色在终端上需要显式开启，在其它场合默认关闭，因此被重定向的标准输出不会收到它无法解释的转义序列。
+	// 未指定 -c 时，只有输出目标是终端、没有设置 NO_COLOR 且 TERM 不是 dumb，才自动开启颜色，因此被重定向的标准输出与写入文件的内容不会带上转义序列。
+	// 显式指定 -c 时按调用方的要求输出颜色，并在目标是终端时尝试开启虚拟终端处理。
+	outputTerminal := terminalOf(stdout)
+	toTerminal := outPath == "" && outputTerminal != nil && term.IsTerminal(outputTerminal)
 	useANSI := false
 	switch {
 	case *noColor:
 		useANSI = false
-	case useColor:
+	case forceColor:
 		useANSI = true
+		if toTerminal {
+			term.EnableANSI(outputTerminal)
+		}
 	default:
-		useANSI = term.IsTerminal(os.Stdout) && os.Getenv("NO_COLOR") == "" &&
-			os.Getenv("TERM") != "dumb"
-	}
-	if useANSI && !useColor {
-		if !term.EnableANSI(os.Stdout) {
+		useANSI = toTerminal && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+		if useANSI && !term.EnableANSI(outputTerminal) {
 			useANSI = false
 		}
 	}
-
 	if outPath == "" {
 		if err := printTo(stdout, arts, useANSI); err != nil {
 			fmt.Fprintf(stderr, "输出失败：%v\n", err)
@@ -214,8 +216,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// 输出到文件。当指定了多个模式时，基础文件名会加上后缀，避免三个结果互相覆盖。
-	// 基础路径会事先校验：目录或设备名必须在 Suffixed 把“dist”变成“dist_ascii” 之前被拒绝，否则会在用户意图所在的目录旁边静默写入成功。
+	// 输出到文件。指定多个模式时，输出路径会加上后缀，避免各结果互相覆盖。
+	// 目录要在加后缀之前进行校验，当路径是目录时，Suffixed 会把“dist”变成“dist_ascii”，写入的文件会出现在目录旁边。
+	// Windows 保留设备名同样要在加后缀之前校验，否则加后缀之后的名字不属于保留设备名，检查就失效了。
 	if err := artio.CheckTarget(outPath); err != nil {
 		fmt.Fprintf(stderr, "输出路径无效：%v\n", err)
 		return 2
@@ -225,19 +228,23 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if len(arts) > 1 {
 			target = artio.Suffixed(outPath, string(art.Mode))
 		}
+		if artio.SameTarget(target, fs.Arg(0)) {
+			fmt.Fprintf(stderr, "输出路径 %s 与输入图片相同，拒绝覆盖该文件\n", target)
+			return 2
+		}
 		content := ansi.String(art, useANSI)
 		abs, err := artio.WriteFile(target, []byte(content))
 		if err != nil {
 			fmt.Fprintf(stderr, "写入 %s 失败：%v\n", target, err)
 			return 1
 		}
-		fmt.Fprintf(stderr, "已写入 %s (%s, %dx%d)\n", abs, art.Mode.Label(), art.Cols, art.Rows)
+		fmt.Fprintf(stderr, "已写入 %s（%s，%d×%d 单元格）\n", abs, art.Mode.Label(), art.Cols, art.Rows)
 	}
 	return 0
 }
 
 // reorderArgs 把位置参数移到末尾，使标志可以出现在文件名之后。
-// Go 的 flag 包遇到第一个非标志参数就会停止解析，否则“asciiart logo.png -w 100”会被静默地当成五个多余的位置参数。
+// Go 的 flag 包遇到第一个非标志参数就会停止解析，因此“asciiart logo.png -w 100”里的 -w 和 100 会被当成多余的位置参数。
 // 这里通过查询 FlagSet 来判断哪些选项需要附带值，因此传给 --k 的负数仍然会被当作值而不是标志。
 func reorderArgs(fs *flag.FlagSet, args []string) []string {
 	var flags, positional []string
@@ -272,9 +279,32 @@ func reorderArgs(fs *flag.FlagSet, args []string) []string {
 	return append(flags, positional...)
 }
 
+// lastFlagName 返回一组别名中最后出现在命令行里的名称，都没有出现时返回空字符串。
+func lastFlagName(args []string, names ...string) string {
+	last, index := "", -1
+	for i, arg := range args {
+		if len(arg) < 2 || arg[0] != '-' {
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		for _, candidate := range names {
+			if name == candidate && i > index {
+				last, index = candidate, i
+			}
+		}
+	}
+	return last
+}
+
 func parseModes(s string) ([]render.Mode, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "all" || s == "" {
+	if s == "" {
+		return nil, errors.New("输出模式不能为空")
+	}
+	if s == "all" {
 		return render.AllModes, nil
 	}
 	// 接受以逗号分隔的组合，例如“ascii,blocks”。
@@ -297,23 +327,34 @@ func parseModes(s string) ([]render.Mode, error) {
 }
 
 func parseHexColor(s string) (render.RGB, error) {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "#")
-	if len(s) != 6 {
-		return render.RGB{}, fmt.Errorf("背景色必须是 #RRGGBB 形式，收到 %q", s)
+	raw := strings.TrimSpace(s)
+	hex := strings.TrimPrefix(raw, "#")
+	if len(hex) != 6 {
+		return render.RGB{}, fmt.Errorf("背景色必须是 #RRGGBB 形式，目前值为「%s」", raw)
 	}
-	v, err := strconv.ParseUint(s, 16, 32)
+	v, err := strconv.ParseUint(hex, 16, 32)
 	if err != nil {
 		return render.RGB{}, fmt.Errorf("背景色解析失败：%v", err)
 	}
 	return render.RGB{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v)}, nil
 }
 
-// printTo 把结果写入 w。当在终端上请求所有模式时，各面板会并排排列，便于一眼比较三个结果。
+// terminalOf 返回 w 对应的终端文件；w 不是 *os.File 时返回 nil。
+func terminalOf(w io.Writer) *os.File {
+	f, ok := w.(*os.File)
+	if !ok {
+		return nil
+	}
+	return f
+}
+
+// printTo 把结果写入 w。当 w 是终端、请求了多个模式且没有颜色时，各模式的输出会并排排列，便于比较。
 // ANSI 颜色会使列宽无法确定，因此这种布局只用于纯文本。
 func printTo(w io.Writer, arts []*render.Art, colored bool) error {
-	if len(arts) > 1 && !colored && term.IsTerminal(os.Stdout) {
-		return writeSideBySide(w, arts)
+	if len(arts) > 1 && !colored {
+		if f := terminalOf(w); f != nil && term.IsTerminal(f) {
+			return writeSideBySide(w, arts)
+		}
 	}
 	for i, art := range arts {
 		if len(arts) > 1 {

@@ -5,9 +5,10 @@
 #   scripts/build.sh              # 构建命令行版本与图形界面版本，输出到 dist/ 目录
 #   scripts/build.sh --package    # 额外生成发布用的 zip 压缩包与校验值
 #   scripts/build.sh --skip-tests # 跳过测试步骤
+#   scripts/build.sh --help       # 显示这段说明
 #   VERSION=1.2.0 scripts/build.sh
 #
-# 可在 Git Bash、MSYS2、WSL 与任意 POSIX shell 中运行，不依赖 make。
+# 可在 Git Bash、MSYS2、WSL 等带有 bash 的环境中运行，不依赖 make。
 
 set -euo pipefail
 
@@ -23,7 +24,7 @@ for arg in "$@"; do
 	--package) DO_PACKAGE=1 ;;
 	--skip-tests) SKIP_TESTS=1 ;;
 	-h | --help)
-		sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -41,6 +42,13 @@ if [ -z "$VERSION" ]; then
 	fi
 fi
 
+case "$VERSION" in
+	*[!0-9A-Za-z._+-]*)
+		echo "错误：版本号只允许字母、数字、点、加号、下划线和连字符，目前值为：$VERSION" >&2
+		exit 2
+		;;
+esac
+
 echo "==> AsciiArt $VERSION"
 
 if ! command -v go >/dev/null 2>&1; then
@@ -48,7 +56,7 @@ if ! command -v go >/dev/null 2>&1; then
 	exit 1
 fi
 
-# 项目没有 cgo 代码，关掉 CGO 以保证产物是单个静态可执行文件。
+# 项目没有 cgo 代码，把 CGO_ENABLED 设为 0，产物是单个静态可执行文件。
 export CGO_ENABLED=0
 
 echo "==> 检查格式"

@@ -1,8 +1,8 @@
-# AsciiArt 构建入口脚本（PowerShell 版本）。
+﻿# AsciiArt 构建入口脚本（PowerShell 版本）。
 #
 #   .\scripts\build.ps1                 # 构建命令行版本与图形界面版本，输出到 dist\ 目录
 #   .\scripts\build.ps1 -Package        # 额外生成发布用的 zip 压缩包与校验值
-#   .\scripts\build.ps1 -SkipTests
+#   .\scripts\build.ps1 -SkipTests      # 跳过测试步骤
 #   $env:VERSION = "1.2.0"; .\scripts\build.ps1
 
 [CmdletBinding()]
@@ -21,13 +21,17 @@ if (-not $version) {
     if (-not $version) { $version = "dev" }
 }
 
+if ($version -notmatch '^[0-9A-Za-z._+-]+$') {
+    throw "版本号只允许字母、数字、点、加号、下划线和连字符，目前值为：$version"
+}
+
 Write-Host "==> AsciiArt $version"
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     throw "未找到 go，请先安装 Go 1.27 或更高版本"
 }
 
-# 项目没有 cgo 代码，产物为单个静态可执行文件。
+# 项目没有 cgo 代码，把 CGO_ENABLED 设为 0，产物是单个静态可执行文件。
 $env:CGO_ENABLED = "0"
 
 Write-Host "==> 检查格式"
@@ -37,7 +41,8 @@ if ($unformatted) {
 }
 
 Write-Host "==> go vet"
-& go vet ./...
+# 关闭 unsafeptr 检查：Win32 绑定中消息参数以 uintptr 类型传入，需要重新解释为指针，静态分析器无法区分这种情况与指针运算错误。
+& go vet -unsafeptr=false ./...
 if ($LASTEXITCODE -ne 0) { throw "go vet 失败" }
 
 if (-not $SkipTests) {

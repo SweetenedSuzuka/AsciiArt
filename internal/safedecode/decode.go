@@ -4,7 +4,7 @@
 // 具体做法如下：
 // - 只打开普通文件，不打开设备、管道和目录。
 // - 拒绝超过 limits.MaxFileBytes 的文件。
-// - 按文件头部字节判断格式，不依赖文件扩展名。
+// - 按文件头部字节判断图片格式，不依赖文件扩展名。
 // - 在分配像素存储之前，先校验头部的宽和高。
 // - 只支持 Go 标准库的三种解码器。
 package safedecode
@@ -24,7 +24,7 @@ import (
 	"asciiart/internal/limits"
 )
 
-// Format 标识一种受支持的图片封装格式。
+// Format 标识一种受支持的图片格式。
 type Format string
 
 const (
@@ -34,7 +34,8 @@ const (
 )
 
 // Image 以 Go 标准库的预乘 RGBA 布局保存解码后的像素。
-// 采用预乘布局是出于设计目的：渲染器的第一步是把每张图像合成到不透明背景上，在预乘空间中这次合成只是一次加法，没有除法，没有取整误差，透明像素也不会带出错误的颜色。
+// 为了简化合成流程，采用预乘布局。
+// 渲染器需要先将图像合成到不透明背景上，在预乘空间中这次合成只是一次加法，没有除法，没有取整误差，透明像素也不会混入错误的颜色。
 type Image struct {
 	Pix    []byte // RGBA 布局，逐像素 4 字节，透明度为预乘。
 	Width  int
@@ -42,7 +43,7 @@ type Image struct {
 	Format Format
 }
 
-// 当内容不是 PNG、JPEG 或 GIF 时，返回 ErrUnsupportedFormat。
+// ErrUnsupportedFormat 表示输入内容不是 PNG、JPEG 或 GIF。
 var ErrUnsupportedFormat = errors.New("不支持的图片格式（仅支持 PNG / JPEG / GIF）")
 
 // Decode 读取 path 指向的文件并返回其像素数据。
@@ -54,7 +55,7 @@ func Decode(path string) (*Image, error) {
 	}
 	defer f.Close()
 
-	// 按固定的字节上限读取整个文件。仅使用 LimitReader 会静默截断内容，解码器可能把被截断的前缀当作可以接受的残缺图像，因此这里另外检查文件长度。
+	// 读取整个文件，上限为 MaxFileBytes。只用 LimitReader 无法判断文件是否超过上限，因为超出的部分会被直接丢弃。因此这里多读取一个字节，再按读取的长度判断。
 	fileBytes, err := io.ReadAll(io.LimitReader(f, limits.MaxFileBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取文件失败：%w", err)
@@ -75,7 +76,7 @@ func Decode(path string) (*Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("解析 %s 头部失败：%w", format, err)
 	}
-	// 头部校验发生在任何像素缓冲区分配之前，因此一个声明超大尺寸的小文件最多浪费几百字节的内存，不会被解码成几个 GB 的数据。
+	// 头部校验发生在任何像素缓冲区分配之前，因此一个声明超大尺寸的小文件只会占用与文件同样大小的内存，不会被解码成几个 GB 的数据。
 	if err := limits.CheckPixelCount(config.Width, config.Height); err != nil {
 		return nil, err
 	}
@@ -86,13 +87,13 @@ func Decode(path string) (*Image, error) {
 	}
 
 	bounds := src.Bounds()
-	// 解码器返回的结果允许与头部声明不一致，因此再次校验。
+	// 解码器返回的结果可以与头部声明不一致，因此再次校验。
 	if err := limits.CheckPixelCount(bounds.Dx(), bounds.Dy()); err != nil {
 		return nil, err
 	}
 
 	dst := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	// image/draw 把所有来源类型（Paletted、YCbCr、Gray、NRGBA 等）统一成需要的 RGBA 布局，这是颜色转换必须正确的关键位置。
+	// image/draw 把所有来源类型（Paletted、YCbCr、Gray、NRGBA 等）统一转换成 RGBA 布局，以保证颜色转换的正确性。
 	draw.Draw(dst, dst.Bounds(), src, bounds.Min, draw.Src)
 
 	return &Image{
@@ -104,8 +105,8 @@ func Decode(path string) (*Image, error) {
 }
 
 // openRegular 仅当 path 是普通文件时才打开它。
-// 目录、字符设备（COM1、CON）、FIFO 和符号链接都会被拒绝。
-// 因为链接可能指向用户所选目录之外的位置，设备可能一直阻塞或者持续输出数据。
+// 目录、字符设备（COM1、CON）、命名管道（FIFO）和符号链接都会被拒绝。
+// 链接可能指向用户所选目录之外的位置，设备可能一直阻塞或者持续输出数据。
 func openRegular(path string) (*os.File, error) {
 	if path == "" {
 		return nil, errors.New("未提供图片路径")
@@ -134,7 +135,7 @@ func openRegular(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("打开文件失败：%w", err)
 	}
-	// 通过文件描述符再检查一次：路径在 Lstat 和 Open 之间可能被替换（TOCTOU 问题），而读取操作使用的是这个句柄。
+	// 由于检查与打开之间存在时间差，路径在 Lstat 和 Open 之间可能被替换，因此需要通过文件描述符再检查一次，确认句柄指向的还是是 Lstat 检查过的那个文件。
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -148,10 +149,14 @@ func openRegular(path string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("文件超过 %d MiB 上限", limits.MaxFileBytes>>20)
 	}
+	if !os.SameFile(linkInfo, info) {
+		f.Close()
+		return nil, errors.New("文件在检查与打开之间被替换")
+	}
 	return f, nil
 }
 
-// detectFormat 按文件头部字节判断封装格式。判断过程不参考文件扩展名：
+// detectFormat 按文件头部字节判断图片格式，判断过程不参考文件扩展名。
 // 一个名为 photo.png 的文件如果内部是 JPEG 也可以接受，如果内部是其它内容则直接拒绝。
 func detectFormat(fileBytes []byte) (Format, error) {
 	switch {

@@ -6,8 +6,8 @@ import (
 )
 
 // renderASCII 把亮度映射到字符集上。
-// 每个字符位对应一个 1x2 的像素块，所以垂直方向的分辨率减半。
-// 终端字符位的高度大约是宽度的两倍，高度减半以后就还原了源图像的宽高比。
+// 每个单元格对应一个 1x2 的像素块，所以垂直方向的分辨率减半。
+// 终端单元格的高度大约是宽度的两倍，高度减半以后就还原了源图像的宽高比。
 func renderASCII(img *safedecode.Image, o Options) (*Art, error) {
 	cols := o.Width
 	rows := int(float64(cols) * float64(img.Height) / float64(img.Width) * 0.5)

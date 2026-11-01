@@ -1,6 +1,7 @@
 package render
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestASCIIGridShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// 字符位的高度大约是宽度的两倍，因此 20x10 的源图像在宽度 10 下必须输出 10x2 的网格。
+	// 单元格的高度大约是宽度的两倍，因此 20x10 的源图像在宽度设为 10 时输出 10x2 的网格。
 	if art.Cols != 10 || art.Rows != 2 {
 		t.Fatalf("grid = %dx%d, want 10x2", art.Cols, art.Rows)
 	}
@@ -92,20 +93,20 @@ func TestASCIIInvert(t *testing.T) {
 	}
 }
 
-// TestBrailleDotOrder 固定 Unicode 的点位顺序：
-// 完整的左列必须设置第 0-3 位（第 1-4 点），即 U+280F。
-// 顺序写错以后，生成的字符看起来像正常的盲文，编码的内容却是错的。
+// TestBrailleDotOrder 验证左列四个像素依次对应第 0-3 位，整列涂黑得到 U+280F。
+// 如果顺序写错，生成的字符看起来仍然是盲文字符，编码的内容却是错的。
 func TestBrailleDotOrder(t *testing.T) {
 	const w, h = 8, 16
 	img := solid(w, h, RGB{255, 255, 255})
-	// 把第一个 2x4 字符位左列的四个像素涂黑。
+	// 把第一个 2x4 单元格左列的四个像素涂黑。
 	for y := 0; y < 4; y++ {
 		i := (y*w + 0) * 4
 		img.Pix[i], img.Pix[i+1], img.Pix[i+2] = 0, 0, 0
 	}
 
 	o := DefaultOptions()
-	o.Width = w / 2 // pw 等于 w、ph 等于 h，不做重采样，像素一一对应。
+	o.Width = w / 2 // 宽度取一半时，盲文模式的输出像素尺寸正好是 8x16，与源图像相同，因此不重采样，像素一一对应。
+	// 模糊半径取最小、锐化与对比度取 1.0，使阈值判断只取决于原始像素。
 	o.Sigma = 0.5
 	o.Sharpen = 1.0
 	o.Contrast = 1.0
@@ -145,7 +146,7 @@ func TestBrailleSingleDot(t *testing.T) {
 
 func TestBlocksRequireBothHalvesOpaque(t *testing.T) {
 	img := solid(4, 4, RGB{10, 20, 30})
-	// 在第一个字符位的下半行打一个透明孔。
+	// 把第二行像素（第一行单元格的下半部分）设为完全透明。
 	for x := 0; x < 4; x++ {
 		img.Pix[((1)*4+x)*4+3] = 0
 	}
@@ -161,9 +162,9 @@ func TestBlocksRequireBothHalvesOpaque(t *testing.T) {
 	}
 }
 
-func TestBlocksColours(t *testing.T) {
+func TestBlocksColors(t *testing.T) {
 	img := solid(2, 2, RGB{0, 0, 0})
-	// 上一行红色，下一行蓝色。
+	// 第一行红色，第二行蓝色。
 	for x := 0; x < 2; x++ {
 		i := x * 4
 		img.Pix[i], img.Pix[i+1], img.Pix[i+2] = 255, 0, 0
@@ -193,6 +194,8 @@ func TestOptionsValidate(t *testing.T) {
 		{"charset control char", func(o *Options) { o.Charset = "ab\x1b[31mc" }},
 		{"charset too short", func(o *Options) { o.Charset = "x" }},
 		{"sigma out of range", func(o *Options) { o.Sigma = 0 }},
+		{"sigma NaN", func(o *Options) { o.Sigma = math.NaN() }},
+		{"sharpen infinite", func(o *Options) { o.Sharpen = math.Inf(1) }},
 		{"sharpen below one", func(o *Options) { o.Sharpen = 0.5 }},
 		{"scale out of range", func(o *Options) { o.Scale = 100 }},
 	}
@@ -218,7 +221,7 @@ func TestDefaultOptionsAreValid(t *testing.T) {
 }
 
 func TestRenderRejectsOversizedGrid(t *testing.T) {
-	// 1x20000 的源图像在宽度 400 下会生成远超单元上限的网格。
+	// 2x20000 的源图像在宽度 400 下会生成远超单元格总数上限的网格。
 	img := solid(2, 20000, RGB{128, 128, 128})
 	o := DefaultOptions()
 	o.Width = 400
