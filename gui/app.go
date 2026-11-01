@@ -567,31 +567,41 @@ func (a *App) exportDialog() {
 		a.invalidate()
 		return
 	}
-	content := a.plainText()
+	content := a.artText()
 	if _, err := artio.WriteFile(path, []byte(content)); err != nil {
 		a.errMsg = err.Error()
 		a.invalidate()
 		return
 	}
 	a.errMsg = ""
-	a.status = "已导出到 " + path
+	a.status = a.colorStateLabel() + " · 已导出到 " + path
 	a.invalidate()
 }
 
-// plainText 生成当前字符画的纯文本，不带 ANSI 转义序列。
-// 导出到 .txt 文件或复制到剪贴板都是纯文本。
-func (a *App) plainText() string {
+// artText 生成当前字符画的文本，供导出文件与复制到剪贴板使用。
+// 「彩色」开关同时决定预览、导出和复制是否带颜色，开启时文本带有 24 位 ANSI 颜色转义序列，关闭时是纯文本。
+func (a *App) artText() string {
 	if a.art == nil {
 		return ""
 	}
-	return ansi.String(a.art, false)
+	return ansi.String(a.art, a.colorOn)
 }
 
+// colorStateLabel 返回颜色状态标签，说明导出或复制的内容是否带有颜色转义序列。
+// 标签放在状态栏最前面。
+func (a *App) colorStateLabel() string {
+	if a.colorOn {
+		return "含 ANSI 颜色"
+	}
+	return "纯文本"
+}
+
+// copyToClipboard 把当前字符画复制到剪贴板。
 func (a *App) copyToClipboard() {
 	if a.art == nil {
 		return
 	}
-	text := a.plainText()
+	text := a.artText()
 	utf, err := syscall.UTF16FromString(text)
 	if err != nil {
 		a.errMsg = "文本包含空字符（U+0000），无法复制到剪贴板"
@@ -633,7 +643,7 @@ func (a *App) copyToClipboard() {
 	}
 
 	a.errMsg = ""
-	a.status = "已复制到剪贴板"
+	a.status = a.colorStateLabel() + " · 已复制到剪贴板"
 	a.invalidate()
 }
 
@@ -858,6 +868,11 @@ func (a *App) showSaveDialog() (string, bool) {
 	if u, err := syscall.UTF16FromString(def); err == nil && len(u) <= len(buf) {
 		copy(buf, u)
 	}
+	// 对话框标题写明这次保存的内容是否带颜色转义序列，用户在保存前就能看到。
+	title := "导出为纯文本"
+	if a.colorOn {
+		title = "导出为带 ANSI 颜色的文本"
+	}
 	filter := utf16List(
 		"文本文件 (*.txt)", "*.txt",
 		"所有文件 (*.*)", "*.*",
@@ -868,7 +883,7 @@ func (a *App) showSaveDialog() (string, bool) {
 		LpstrFilter: &filter[0],
 		LpstrFile:   &buf[0],
 		NMaxFile:    DWORD(len(buf)),
-		LpstrTitle:  utf16Ptr("导出为文本"),
+		LpstrTitle:  utf16Ptr(title),
 		Flags:       ofnOverwritePrompt | ofnPathMustExist | ofnExplorer | ofnNoChangeDir,
 		LpstrDefExt: utf16Ptr("txt"),
 	}
