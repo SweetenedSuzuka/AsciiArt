@@ -1,0 +1,27 @@
+# 统一换行符
+
+* text=auto eol=lf
+
+# 需要使用 LF 换行的文件
+*.go    text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.mod   text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+LICENSE text eol=lf
+
+# PowerShell 脚本使用 CRLF
+*.ps1   text eol=crlf
+
+# 排除二进制文件
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.exe   binary
+*.zip   binary
